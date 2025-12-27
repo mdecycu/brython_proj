@@ -110,6 +110,15 @@ def brython_test():
     else:
         return render_template('brython_test.html')
 
+# 新增 pyodide 程式執行功能
+
+@app.route('/pyodide_test')
+def pyodide_test():
+    if 'user_id' not in session:
+        return render_template('pyodide_test_not_login.html')
+    else:
+        return render_template('pyodide_test.html')
+
 # ==============================
 # 儲存程式
 # ==============================
