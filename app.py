@@ -3,7 +3,6 @@ from peewee import *
 from flask_bcrypt import Bcrypt
 import datetime
 import os
-import urllib.parse
 from functools import wraps
 from functools import reduce
 import operator
@@ -25,7 +24,8 @@ class User(BaseModel):
 class Program(BaseModel):
     time = DateTimeField(default=datetime.datetime.now)
     user = ForeignKeyField(User, backref='programs')
-    brython = TextField()
+    code = TextField()          # 統一儲存程式碼
+    type = CharField(default='brython')  # 'brython' 或 'pyodide'
     from_where = CharField(default='web')
     memo = TextField(null=True)
     desp = TextField(null=True)
@@ -37,7 +37,7 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
-            flash("請先登入")
+            flash("請先登入才能執行此操作")
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
@@ -97,20 +97,15 @@ def logout():
     return redirect(url_for('index'))
 
 # ==============================
-# 編輯器主頁（不再傳 load_code）
+# 編輯器頁面（不需登入即可使用）
 # ==============================
 
 @app.route('/brython_test')
-#@login_required
 def brython_test():
-    # 完全不使用 session 載入程式碼
-    # 針對沒有登入的情況
     if 'user_id' not in session:
         return render_template('brython_test_not_login.html')
     else:
         return render_template('brython_test.html')
-
-# 新增 pyodide 程式執行功能
 
 @app.route('/pyodide_test')
 def pyodide_test():
@@ -120,84 +115,84 @@ def pyodide_test():
         return render_template('pyodide_test.html')
 
 # ==============================
-# 儲存程式
+# 儲存程式（必須登入）
 # ==============================
-
 @app.route('/save_program', methods=['POST'])
 @login_required
 def save_program():
     data = request.get_json()
-    brython_code = data.get('brython_code', '').strip()
+    code = data.get('code', '').strip()
+    prog_type = data.get('type', 'brython')
     desp = data.get('desp', '').strip()
 
-    if not brython_code:
+    if not code:
         return jsonify({"message": "程式碼不能為空"}), 400
 
     try:
         user = User.get(User.id == session['user_id'])
         program = Program.create(
             user=user,
-            brython=brython_code,
+            code=code,
+            type=prog_type,
             from_where='',
             memo='',
             desp=desp
         )
         return jsonify({
             "message": "程式碼與描述已儲存到資料庫！",
+            "id": program.id,
             "desp": program.desp
         }), 200
     except Exception as e:
         return jsonify({"message": f"儲存失敗: {str(e)}"}), 500
 
 # ==============================
-# 載入程式（舊路由 → 導向新方式）
+# 載入程式：根據 type 跳轉（不需登入）
 # ==============================
-
 @app.route('/load_program/<int:program_id>')
-#@login_required
 def load_program(program_id):
     try:
-        Program.get(Program.id == program_id)   # 只檢查存在
-        return redirect(f"{url_for('brython_test')}?load={program_id}")
+        program = Program.get(Program.id == program_id)
+        if program.type == 'pyodide':
+            return redirect(f"{url_for('pyodide_test')}?load={program_id}")
+        else:
+            return redirect(f"{url_for('brython_test')}?load={program_id}")
     except Program.DoesNotExist:
         flash("程式不存在")
         return redirect(url_for('programs'))
 
 # ==============================
-# API：取得單一程式（用於自動載入）
+# API：取得單一程式（不需登入即可讀取）
 # ==============================
-
 @app.route('/api/program/<int:program_id>')
-#@login_required
 def api_get_program(program_id):
     try:
-        # 這裡仍然只檢查程式是否存在（不檢查 user），因為已登入即可看全部
         program = Program.get(Program.id == program_id)
         return jsonify({
-            'brython': program.brython,
+            'code': program.code,
+            'type': program.type,
             'desp': program.desp or ''
         })
     except Program.DoesNotExist:
         return jsonify({'error': 'Not found'}), 404
 
 # ==============================
-# 程式清單
+# 程式清單（不需登入即可瀏覽）
 # ==============================
-
 @app.route('/programs')
-#@login_required
 def programs():
     page = request.args.get('page', 1, type=int)
     per_page = 20
-    # 移除 user 過濾
     total_programs = Program.select().count()
     total_pages = (total_programs + per_page - 1) // per_page
     has_next = page < total_pages
     has_prev = page > 1
+
     programs = Program.select() \
-                  .order_by(Program.time.desc()).paginate(page, per_page)
-    # 為了在模板中顯示 account，預先 join User
-    programs = programs.join(User)
+        .order_by(Program.time.desc()) \
+        .paginate(page, per_page) \
+        .join(User)
+
     return render_template('programs.html',
                            programs=programs,
                            page=page,
@@ -207,25 +202,23 @@ def programs():
                            per_page=per_page)
 
 # ==============================
-# 搜尋程式
+# 搜尋程式（不需登入即可搜尋）
 # ==============================
-
 @app.route('/search_programs')
-#@login_required
 def search_programs():
     q = request.args.get('q', '').strip()
     page = request.args.get('page', 1, type=int)
     per_page = 5
-    # 移除 user 過濾，改成 join User 以取得 account
-    base = Program.select(Program, User.account).join(User)
 
+    base = Program.select(Program, User.account).join(User)
     if q:
         conditions = [
             User.account.contains(q),
-            Program.brython.contains(q),
+            Program.code.contains(q),
             Program.from_where.contains(q),
             Program.memo.contains(q),
-            Program.desp.contains(q)
+            Program.desp.contains(q),
+            Program.type.contains(q)
         ]
         base = base.where(reduce(operator.or_, conditions))
 
@@ -233,6 +226,7 @@ def search_programs():
     total_pages = (total + per_page - 1) // per_page
     has_next = page < total_pages
     has_prev = page > 1
+
     programs = base.order_by(Program.time.desc()).paginate(page, per_page)
 
     result = []
@@ -240,12 +234,14 @@ def search_programs():
         result.append({
             'id': p.id,
             'time': p.time.strftime('%Y-%m-%d %H:%M'),
-            'account': p.user.account,          # 這裡直接取 join 後的 account
-            'brython_snippet': (p.brython or '')[:70].replace('\n', ' ') + ('...' if len(p.brython or '') > 70 else ''),
+            'account': p.user.account,
+            'type': p.type,
+            'code_snippet': (p.code or '')[:70].replace('\n', ' ') + ('...' if len(p.code or '') > 70 else ''),
             'from_where': p.from_where or '',
             'memo': (p.memo or '')[:40] + ('...' if p.memo and len(p.memo) > 40 else ''),
             'desp': (p.desp or '')[:50] + ('...' if p.desp and len(p.desp) > 50 else ''),
         })
+
     return jsonify({
         'programs': result,
         'page': page,
@@ -254,10 +250,6 @@ def search_programs():
         'has_prev': has_prev,
         'total': total
     })
-
-# ==============================
-# 啟動
-# ==============================
 
 if __name__ == '__main__':
     app.run(debug=True)

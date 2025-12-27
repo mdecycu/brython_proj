@@ -18,10 +18,11 @@ class User(Model):
 class Program(Model):
     time = DateTimeField(default=datetime.datetime.now)
     user = ForeignKeyField(User, backref='programs')
-    brython = TextField()
+    code = TextField()          # 統一儲存程式碼
+    type = CharField(default='brython')  # 'brython' 或 'pyodide'
     from_where = CharField(default='web')
     memo = TextField(null=True)
-    desp = TextField(null=True) 
+    desp = TextField(null=True)
     
     class Meta:
         database = db

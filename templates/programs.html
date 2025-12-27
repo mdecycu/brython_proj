@@ -38,14 +38,20 @@
             <td>{{ program.id }}</td>
             <td>{{ program.time.strftime('%Y-%m-%d %H:%M:%S') }}</td>
             <td>{{ program.user.account }}</td>
-            <td><code style="font-size:12px; white-space: pre-wrap;">{{ program.brython | replace('\n', ' ') | truncate(120, True) | e }}</code></td>
+            <td><code style="font-size:12px; white-space: pre-wrap;">{{ program.code | replace('\n', ' ') | truncate(120, True) | e }}</code></td>
             <td>{{ program.memo or '' }}</td>
             <td>{{ program.desp or '' }}</td>
             <td>
-                <!-- 關鍵：使用 ?load=ID 觸發自動載入 -->
-                <a href="{{ url_for('brython_test') }}?load={{ program.id }}">
-                    <button class="btn-load">載入</button>
+                <!-- 根據 type 判斷載入 Brython 或 Pyodide -->
+                {% if program.type == 'pyodide' %}
+                <a href="{{ url_for('pyodide_test') }}?load={{ program.id }}">
+                    <button class="btn-load">載入 Pyodide</button>
                 </a>
+                {% else %}
+                <a href="{{ url_for('brython_test') }}?load={{ program.id }}">
+                    <button class="btn-load">載入 Brython</button>
+                </a>
+                {% endif %}
             </td>
         </tr>
         {% else %}
