@@ -32,13 +32,14 @@
         .container { display: flex; gap: 20px; flex-wrap: wrap; }
         .panel { flex: 1; min-width: 300px; }
         #kw_editor1 { height: 400px; border: 1px solid #ddd; }
-        #brython_div1 { height: 400px; border: 2px solid #007bff; background: #fff; overflow: auto; }
+        #brython_div1 { height: 400px; border: 2px solid #007bff; background: #fff; overflow: auto; display:flex; align-items:center; justify-content:center;}
         .controls { margin: 10px 0; }
         button { padding: 8px 16px; margin: 5px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer; }
         .btn-run { background: #28a745; color: white; }
         .btn-example { background: #17a2b8; color: white; }
         textarea#kw_console1 { width: 100%; height: 120px; font-family: monospace; }
         textarea#program_desc { width: 100%; height: 60px; margin-top: 5px; }
+        img.plot-img { max-width: 100%; max-height: 100%; }
     </style>
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
 </head>
@@ -51,10 +52,8 @@
 
 <span id="search_toggle" style="color:#0066cc;cursor:pointer;text-decoration:underline;">程式查詢</span>
 
-<!-- 隱藏欄位：記錄目前程式類型 -->
 <input type="hidden" id="program_type" value="pyodide">
 
-<!-- 查詢面板 -->
 <div id="search_panel" style="display:none;margin:15px 0;padding:15px;background:#f9f9f9;border:1px solid #ddd;border-radius:6px;">
     <form id="search_form" style="margin-bottom:10px;">
         <input type="text" id="search_query"
@@ -73,6 +72,7 @@
         <div class="controls">
             <button id="kw_run1" class="btn-run">執行程式</button>
             <button id="kw_clear_console1">清除輸出</button>
+            <button id="clear_bd1">清除畫布</button>
             <button onclick="location.reload()">重新載入</button>
         </div>
         <div>
@@ -114,13 +114,10 @@ let pyodide = null;
 let pyodideReady = false;
 
 async function initPyodide() {
-    pyodide = await loadPyodide({
-        stdout: msg => kw_console1.value += msg + "\n",
-        stderr: msg => kw_console1.value += msg + "\n"
-    });
-    await pyodide.loadPackage(["numpy", "scipy", "matplotlib", "sympy"]);
+    pyodide = await loadPyodide();
+    await pyodide.loadPackage(["numpy","scipy","matplotlib","sympy"]);
     pyodideReady = true;
-    kw_console1.value += "Pyodide Ready with numpy, scipy, matplotlib, sympy\n";
+    kw_console1.value = "Pyodide Ready with numpy, scipy, matplotlib, sympy\n";
 }
 initPyodide();
 
@@ -134,6 +131,7 @@ async function run_code() {
         return;
     }
     try {
+        // 文字輸出重定向
         await pyodide.runPythonAsync(`
 import sys
 class JsWriter:
@@ -141,17 +139,46 @@ class JsWriter:
         from js import kw_console1
         kw_console1.value += s
         kw_console1.scrollTop = kw_console1.scrollHeight
+    def flush(self):
+        pass
 sys.stdout = JsWriter()
 sys.stderr = JsWriter()
         `);
+
+        // 將 plt.show() 也改為輸出到 div
+        await pyodide.runPythonAsync(`
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import io, base64
+import builtins
+
+def custom_show():
+    fig = plt.gcf()
+    canvas = FigureCanvasAgg(fig)
+    buf = io.BytesIO()
+    canvas.print_png(buf)
+    buf.seek(0)
+    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+    from js import brython_div1
+    brython_div1.innerHTML = f'<img class="plot-img" src="data:image/png;base64,{img_b64}">'
+
+# 替換 plt.show
+plt.show = custom_show
+        `);
+
+        // 執行使用者程式
         await pyodide.runPythonAsync(editor.getValue());
+
         kw_console1.value += "\n<completed>\n";
-    } catch (e) {
+    } catch(e) {
         kw_console1.value += e + "\n";
     }
 }
 
 kw_run1.onclick = run_code;
+document.getElementById('clear_bd1').onclick = function() {
+    brython_div1.innerHTML = ""; // 清空圖像
+};
 kw_clear_console1.onclick = () => kw_console1.value = "";
 
 // 範例按鈕
@@ -161,51 +188,46 @@ example3.onclick = () => editor.setValue(`import random\nprint(random.randint(1,
 example4.onclick = () => editor.setValue(`import numpy as np\na = np.array([1,2,3])\nprint(a * 2)`, -1);
 example5.onclick = () => editor.setValue(`import matplotlib.pyplot as plt\nplt.plot([1,2,3],[4,5,6])\nplt.show()`, -1);
 
-// 自動儲存到 localStorage
-setInterval(() => {
-    localStorage["kw_py_src1"] = editor.getValue();
-}, 1000);
+// 自動儲存
+setInterval(()=>{localStorage["kw_py_src1"] = editor.getValue();}, 1000);
 
-// 查詢面板控制
-document.getElementById('search_toggle').onclick = () => {
+// 搜尋面板控制
+document.getElementById('search_toggle').onclick = ()=> {
     const p = document.getElementById('search_panel');
-    p.style.display = p.style.display === 'none' ? 'block' : 'none';
+    p.style.display = p.style.display==='none'?'block':'none';
 };
-document.getElementById('search_close').onclick = () => {
+document.getElementById('search_close').onclick = ()=> {
     document.getElementById('search_panel').style.display = 'none';
 };
-document.getElementById('search_form').onsubmit = e => {
+document.getElementById('search_form').onsubmit = e=>{
     e.preventDefault();
     const q = document.getElementById('search_query').value.trim();
-    performSearch(q, 1);
+    performSearch(q,1);
 };
 
-function performSearch(q, page = 1) {
+function performSearch(q,page=1){
     const div = document.getElementById('search_results');
     div.innerHTML = '<p style="color:#666;">搜尋中...</p>';
     fetch(`/search_programs?q=${encodeURIComponent(q)}&page=${page}`)
-        .then(r => r.json())
-        .then(data => {
-            if (!data.programs.length) {
-                div.innerHTML = '<p style="color:#999;">查無結果</p>';
-                return;
-            }
-            let html = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
-                <thead style="background:#e9ecef;"><tr>
-                    <th style="text-align:left;padding:8px;">時間</th>
-                    <th style="text-align:left;padding:8px;">帳號</th>
-                    <th style="text-align:left;padding:8px;">類型</th>
-                    <th style="text-align:left;padding:8px;">程式片段</th>
-                    <th style="text-align:left;padding:8px;">說明</th>
-                    <th style="text-align:center;padding:8px;">操作</th>
-                </tr></thead><tbody>`;
-            data.programs.forEach(p => {
-                const snippet = (p.code_snippet || '').replace(/</g, '&lt;');
-                const desp = p.desp ? p.desp.replace(/</g, '&lt;') : '<em style="color:#aaa;">(無)</em>';
-                html += `<tr style="border-bottom:1px solid #eee;">
+        .then(r=>r.json())
+        .then(data=>{
+            if(!data.programs.length){div.innerHTML='<p style="color:#999;">查無結果</p>'; return;}
+            let html=`<table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead style="background:#e9ecef;"><tr>
+                <th style="text-align:left;padding:8px;">時間</th>
+                <th style="text-align:left;padding:8px;">帳號</th>
+                <th style="text-align:left;padding:8px;">類型</th>
+                <th style="text-align:left;padding:8px;">程式片段</th>
+                <th style="text-align:left;padding:8px;">說明</th>
+                <th style="text-align:center;padding:8px;">操作</th>
+            </tr></thead><tbody>`;
+            data.programs.forEach(p=>{
+                const snippet=(p.code_snippet||'').replace(/</g,'&lt;');
+                const desp=p.desp?p.desp.replace(/</g,'&lt;'):'<em style="color:#aaa;">(無)</em>';
+                html+=`<tr style="border-bottom:1px solid #eee;">
                     <td style="padding:8px;">${p.time}</td>
                     <td style="padding:8px;">${p.account}</td>
-                    <td style="padding:8px;">${p.type || 'brython'}</td>
+                    <td style="padding:8px;">${p.type||'brython'}</td>
                     <td style="padding:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;">${snippet}</td>
                     <td style="padding:8px;">${desp}</td>
                     <td style="padding:8px;text-align:center;">
@@ -213,49 +235,37 @@ function performSearch(q, page = 1) {
                     </td>
                 </tr>`;
             });
-            html += `</tbody></table>`;
-            div.innerHTML = html;
+            html+='</tbody></table>';
+            div.innerHTML=html;
         })
-        .catch(err => {
-            div.innerHTML = `<p style="color:red;">載入失敗：${err.message}</p>`;
+        .catch(err=>{
+            div.innerHTML=`<p style="color:red;">載入失敗：${err.message}</p>`;
         });
 }
 
-// 自動載入程式（檢查 type 並可能跳轉）
-document.addEventListener('DOMContentLoaded', function() {
+// 自動載入程式
+document.addEventListener('DOMContentLoaded', function(){
     const urlParams = new URLSearchParams(window.location.search);
     const loadId = urlParams.get('load');
-    if (!loadId) return;
-
+    if(!loadId) return;
     fetch(`/api/program/${loadId}`)
-        .then(r => r.json())
-        .then(data => {
-            if (data.error) {
-                alert('程式不存在或無法載入');
-                return;
-            }
-            if (data.type !== 'pyodide') {
-                // 若是 Brython 程式，跳轉到 Brython 頁面
+        .then(r=>r.json())
+        .then(data=>{
+            if(data.error){alert('程式不存在或無法載入'); return;}
+            if(data.type!=='pyodide'){
                 window.location.href = `/brython_test?load=${loadId}`;
                 return;
             }
-            // 正確的 Pyodide 程式，直接載入
-            waitForAce(() => {
-                editor.setValue(data.code || '', -1);
-                document.getElementById('program_desc').value = data.desp || '';
-            });
+            waitForAce(()=>{editor.setValue(data.code||'',-1); document.getElementById('program_desc').value=data.desp||'';});
         })
-        .catch(() => alert('載入失敗'));
+        .catch(()=>alert('載入失敗'));
 });
 
-function waitForAce(callback, attempts = 100) {
-    if (attempts === 0) {
-        alert('編輯器載入失敗');
-        return;
-    }
+function waitForAce(callback, attempts=100){
+    if(attempts===0){alert('編輯器載入失敗'); return;}
     const ed = window.ace && ace.edit("kw_editor1");
-    if (ed) callback();
-    else setTimeout(() => waitForAce(callback, attempts - 1), 100);
+    if(ed) callback();
+    else setTimeout(()=>waitForAce(callback, attempts-1),100);
 }
 </script>
 </body>
